@@ -80,6 +80,56 @@ func TestSSHConfig(t *testing.T) {
 				PrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----",
 			},
 		},
+		{
+			// HTTP Custom style methods round-trip: WS+TLS with a
+			// custom host, SNI, pinned TLS version and insecure.
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 443,
+				"username": "alice",
+				"password": "secret",
+				"method": "ws-tls",
+				"wsPath": "/ssh",
+				"wsHost": "ws.example.com",
+				"sni": "sni.example.com",
+				"sniVersion": "tls1.2",
+				"insecure": true
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:    "ssh.example.com",
+				Port:       443,
+				Username:   "alice",
+				Password:   "secret",
+				Method:     "ws-tls",
+				WsPath:     "/ssh",
+				WsHost:     "ws.example.com",
+				Sni:        "sni.example.com",
+				SniVersion: "tls1.2",
+				Insecure:   true,
+			},
+		},
+		{
+			// Payload method round-trips the template verbatim
+			// (substitution happens at dial time, not in Build).
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 3128,
+				"username": "alice",
+				"password": "secret",
+				"method": "payload",
+				"payload": "GET / HTTP/1.1\nHost: [host]\n\n"
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:  "ssh.example.com",
+				Port:     3128,
+				Username: "alice",
+				Password: "secret",
+				Method:   "payload",
+				Payload:  "GET / HTTP/1.1\nHost: [host]\n\n",
+			},
+		},
 	})
 }
 

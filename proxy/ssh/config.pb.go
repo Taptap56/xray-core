@@ -3,6 +3,12 @@
 // 	protoc-gen-go v1.36.12
 // 	protoc        v6.31.1
 // source: proxy/ssh/config.proto
+//
+// NOTE: regenerated without protoc — the raw descriptor below was
+// produced by a throwaway descriptorpb program (cmd-descgen-tmp,
+// deleted after use) and validated first by rebuilding the current
+// 10-field descriptor byte-identical to protoc's rawDesc.
+// Regenerate with protoc if the .proto changes.
 
 package ssh
 
@@ -58,8 +64,35 @@ type Config struct {
 	// only answer NULL queries (proven by HTTP Custom for one account),
 	// so the type must be configurable per server.
 	DnsttRecordType string `protobuf:"bytes,10,opt,name=dnstt_record_type,json=dnsttRecordType,proto3" json:"dnstt_record_type,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Transport method (HTTP Custom style): "" or "direct" (plain TCP
+	// dial, default), "payload" (custom payload over TCP), "ws"
+	// (WebSocket), "ws-tls" (WebSocket over TLS), "tls" (direct TLS
+	// with SNI only), "slowdns" (DNSTT dial). Empty + dnstt_ns set
+	// implies "slowdns".
+	Method string `protobuf:"bytes,11,opt,name=method,proto3" json:"method,omitempty"`
+	// Custom payload template for method "payload" (HTTP-style). The
+	// placeholders [host] (SSH server host) and [port] (SSH server
+	// port) are substituted; lone LF line endings are normalised to
+	// CRLF before sending, then the SSH handshake follows on the same
+	// connection.
+	Payload string `protobuf:"bytes,12,opt,name=payload,proto3" json:"payload,omitempty"`
+	// WebSocket path for methods "ws" and "ws-tls". Empty means "/".
+	WsPath string `protobuf:"bytes,13,opt,name=ws_path,json=wsPath,proto3" json:"ws_path,omitempty"`
+	// WebSocket Host header for methods "ws" and "ws-tls". Empty means
+	// the SSH server host.
+	WsHost string `protobuf:"bytes,14,opt,name=ws_host,json=wsHost,proto3" json:"ws_host,omitempty"`
+	// SNI (Server Name Indication) for methods "tls" and "ws-tls".
+	// Empty means the SSH server host.
+	Sni string `protobuf:"bytes,15,opt,name=sni,proto3" json:"sni,omitempty"`
+	// TLS version for methods "tls" and "ws-tls": "default" (auto —
+	// let the TLS stack negotiate, no forced version), "tls1",
+	// "tls1.1", "tls1.2", "tls1.3". Empty means "default".
+	SniVersion string `protobuf:"bytes,16,opt,name=sni_version,json=sniVersion,proto3" json:"sni_version,omitempty"`
+	// Skip TLS certificate verification for methods "tls" and
+	// "ws-tls" (HTTP Custom "Izinkan koneksi tidak aman").
+	Insecure      bool `protobuf:"varint,17,opt,name=insecure,proto3" json:"insecure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -162,21 +195,78 @@ func (x *Config) GetDnsttRecordType() string {
 	return ""
 }
 
+func (x *Config) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *Config) GetPayload() string {
+	if x != nil {
+		return x.Payload
+	}
+	return ""
+}
+
+func (x *Config) GetWsPath() string {
+	if x != nil {
+		return x.WsPath
+	}
+	return ""
+}
+
+func (x *Config) GetWsHost() string {
+	if x != nil {
+		return x.WsHost
+	}
+	return ""
+}
+
+func (x *Config) GetSni() string {
+	if x != nil {
+		return x.Sni
+	}
+	return ""
+}
+
+func (x *Config) GetSniVersion() string {
+	if x != nil {
+		return x.SniVersion
+	}
+	return ""
+}
+
+func (x *Config) GetInsecure() bool {
+	if x != nil {
+		return x.Insecure
+	}
+	return false
+}
+
 var File_proxy_ssh_config_proto protoreflect.FileDescriptor
 
 const file_proxy_ssh_config_proto_rawDesc = "" +
-	"\n\x16proxy/ssh/config.proto\x12\x0exray.proxy.ssh" +
-	"\"\xca\x02\n\x06Config\x12\x18\n\x07address\x18\x01 \x01(\tR\x07address\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x0dR\x04port\x12\x1a\n\x08username\x18\x03 \x01(\tR\x08use" +
-	"rname\x12\x1a\n\x08password\x18\x04 \x01(\tR\x08password\x12\x1f\n\x0bpri" +
-	"vate_key\x18\x05 \x01(\tR\nprivateKey\x12\x19\n\x08dnstt_ns\x18\x06" +
-	" \x01(\tR\x07dnsttNs\x12!\n\x0cdnstt_pubkey\x18\x07 \x01(\tR\x0bdns" +
-	"ttPubkey\x12%\n\x0ednstt_resolver\x18\x08 \x01(\tR\x0ddnsttR" +
-	"esolver\x12(\n\x10dnstt_kcp_window\x18\t \x01(\x0dR\x0ednstt" +
-	"KcpWindow\x12*\n\x11dnstt_record_type\x18\n \x01(\tR\x0fdn" +
-	"sttRecordTypeBL\n\x12com.xray.proxy.sshP\x01Z#g" +
-	"ithub.com/xtls/xray-core/proxy/ssh\xaa\x02\x0eXra" +
-	"y.Proxy.Sshb\x06proto3"
+	"\n\x16proxy/ssh/config.proto\x12\x0exray.p" +
+	"roxy.ssh\"\xfd\x03\n\x06Config\x12\x18\n\x07address\x18\x01" +
+	" \x01(\tR\x07address\x12\x12\n\x04port\x18\x02 \x01(\x0dR\x04por" +
+	"t\x12\x1a\n\x08username\x18\x03 \x01(\tR\x08username\x12\x1a\n" +
+	"\x08password\x18\x04 \x01(\tR\x08password\x12\x1f\n\x0bpri" +
+	"vate_key\x18\x05 \x01(\tR\nprivateKey\x12\x19\n\x08dn" +
+	"stt_ns\x18\x06 \x01(\tR\x07dnsttNs\x12!\n\x0cdnstt_p" +
+	"ubkey\x18\x07 \x01(\tR\x0bdnsttPubkey\x12%\n\x0ednst" +
+	"t_resolver\x18\x08 \x01(\tR\x0ddnsttResolver\x12" +
+	"(\n\x10dnstt_kcp_window\x18\t \x01(\x0dR\x0ednstt" +
+	"KcpWindow\x12*\n\x11dnstt_record_type\x18\n" +
+	" \x01(\tR\x0fdnsttRecordType\x12\x16\n\x06method\x18" +
+	"\x0b \x01(\tR\x06method\x12\x18\n\x07payload\x18\x0c \x01(\tR\x07" +
+	"payload\x12\x17\n\x07ws_path\x18\x0d \x01(\tR\x06wsPath" +
+	"\x12\x17\n\x07ws_host\x18\x0e \x01(\tR\x06wsHost\x12\x10\n\x03sni" +
+	"\x18\x0f \x01(\tR\x03sni\x12\x1f\n\x0bsni_version\x18\x10 \x01(\t" +
+	"R\nsniVersion\x12\x1a\n\x08insecure\x18\x11 \x01(\x08R\x08" +
+	"insecureBL\n\x12com.xray.proxy.sshP\x01" +
+	"Z#github.com/xtls/xray-core/prox" +
+	"y/ssh\xaa\x02\x0eXray.Proxy.Sshb\x06proto3"
 
 var (
 	file_proxy_ssh_config_proto_rawDescOnce sync.Once

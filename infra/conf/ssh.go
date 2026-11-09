@@ -19,6 +19,13 @@ type SSHClientConfig struct {
 	DnsttResolver   string   `json:"dnsttResolver"`
 	DnsttKcpWindow  uint32   `json:"dnsttKcpWindow"`
 	DnsttRecordType string   `json:"dnsttRecordType"`
+	Method          string   `json:"method"`
+	Payload         string   `json:"payload"`
+	WsPath          string   `json:"wsPath"`
+	WsHost          string   `json:"wsHost"`
+	Sni             string   `json:"sni"`
+	SniVersion      string   `json:"sniVersion"`
+	Insecure        bool     `json:"insecure"`
 }
 
 // Build implements Buildable.
@@ -40,6 +47,13 @@ func (v *SSHClientConfig) Build() (proto.Message, error) {
 		DnsttResolver:   v.DnsttResolver,
 		DnsttKcpWindow:  v.DnsttKcpWindow,
 		DnsttRecordType: v.DnsttRecordType,
+		Method:          v.Method,
+		Payload:         v.Payload,
+		WsPath:          v.WsPath,
+		WsHost:          v.WsHost,
+		Sni:             v.Sni,
+		SniVersion:      v.SniVersion,
+		Insecure:        v.Insecure,
 	}
 	return config, nil
 }

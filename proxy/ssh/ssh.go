@@ -11,6 +11,12 @@
 // instead of a direct TCP dial: the session's streams go to the
 // server's fixed port, which must be the SSH port.
 //
+// The transport method (Config.Method, HTTP Custom style) selects
+// how the server is reached: direct TCP (default), a custom payload
+// over TCP, WebSocket, WebSocket over TLS, direct TLS with SNI only,
+// or the DNSTT dial above. Empty method + DNSTT settings implies
+// slowdns, so older SlowDNS profiles keep working.
+//
 // Limitations (by protocol design, not by implementation):
 //   - TCP only. SSH direct-tcpip has no UDP channel, so UDP
 //     destinations are rejected. (DNS itself is served by Xray's own
@@ -24,6 +30,7 @@ package ssh
 
 import (
 	"context"
+	"crypto/tls"
 	stdnet "net"
 	"strings"
 	"sync"
@@ -86,8 +93,29 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 	if config.Password == "" && strings.TrimSpace(config.PrivateKey) == "" {
 		return nil, errors.New("ssh: either password or private_key must be set")
 	}
+	method := strings.ToLower(strings.TrimSpace(config.Method))
+	switch method {
+	case "", methodDirect, methodPayload, methodWS, methodWSTLS, methodTLS, methodSlowDNS:
+		// Known methods ("" is direct).
+	default:
+		return nil, errors.New("ssh: unknown method ", config.Method)
+	}
+	if method == methodPayload && strings.TrimSpace(config.Payload) == "" {
+		return nil, errors.New("ssh: method \"payload\" needs a payload")
+	}
+	if method == methodSlowDNS && strings.TrimSpace(config.DnsttNs) == "" {
+		return nil, errors.New("ssh: method \"slowdns\" needs dnstt_ns")
+	}
+	if _, _, err := tlsVersionRange(config.SniVersion); err != nil {
+		return nil, err
+	}
 	c := &Client{config: config}
-	if strings.TrimSpace(config.DnsttNs) != "" {
+	// The DNSTT dialer is created only when the effective method
+	// uses it: explicit "slowdns", or empty method with DNSTT
+	// settings (older SlowDNS profiles have no method field). A
+	// profile that picks payload/ws/tls keeps stale DNSTT fields
+	// without them breaking the client.
+	if method == methodSlowDNS || (method == "" && strings.TrimSpace(config.DnsttNs) != "") {
 		dialer, err := dnstt.NewDialerWithRecordType(config.DnsttNs, config.DnsttPubkey, config.DnsttResolver, int(config.DnsttKcpWindow), config.DnsttRecordType)
 		if err != nil {
 			return nil, errors.New("ssh: invalid DNSTT settings").Base(err)
@@ -133,9 +161,89 @@ func (c *Client) sshClientConfig() (*ssh.ClientConfig, error) {
 	return cfg, nil
 }
 
+// dialTCP dials the SSH server directly (plain TCP) through the
+// core dialer, with the same retry as before.
+func (c *Client) dialTCP(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
+	dest := net.Destination{
+		Network: net.Network_TCP,
+		Address: net.ParseAddress(c.config.Address),
+		Port:    net.Port(c.config.Port),
+	}
+	if dest.Port == 0 {
+		dest.Port = 22
+	}
+	var transport stdnet.Conn
+	if err := retry.ExponentialBackoff(3, 200).On(func() error {
+		var err error
+		transport, err = dialer.Dial(ctx, dest)
+		return err
+	}); err != nil {
+		return nil, errors.New("ssh: dial server").Base(err)
+	}
+	return transport, nil
+}
+
+// dialTLS dials the SSH server over direct TLS (SNI only, no
+// payload, no WebSocket): TCP dial, then a TLS handshake with the
+// effective SNI, the insecure toggle and the SNI version.
+func (c *Client) dialTLS(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
+	raw, err := c.dialTCP(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg, err := buildTLSConfig(c.effectiveSNI(), c.config.SniVersion, c.config.Insecure)
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	tlsConn := tls.Client(raw, tlsCfg)
+	dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+		raw.Close()
+		return nil, errors.New("ssh: TLS handshake with server").Base(err)
+	}
+	return tlsConn, nil
+}
+
+// dialTransport dials the transport to the SSH server according to
+// the effective method, and returns the raw connection over which
+// the SSH handshake runs. The DNSTT session (when used) is owned by
+// the dnstt dialer and shared across re-establishments.
+func (c *Client) dialTransport(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
+	switch c.effectiveMethod() {
+	case methodSlowDNS:
+		dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
+		defer cancel()
+		transport, err := c.dnsttDial.DialContext(dialCtx, "tcp", c.serverAddr())
+		if err != nil {
+			return nil, errors.New("ssh: dial server through DNSTT").Base(err)
+		}
+		return transport, nil
+	case methodPayload:
+		transport, err := c.dialTCP(ctx, dialer)
+		if err != nil {
+			return nil, err
+		}
+		payload := substitutePayload(c.config.Payload, c.config.Address, c.config.Port)
+		if _, err := transport.Write([]byte(payload)); err != nil {
+			transport.Close()
+			return nil, errors.New("ssh: send payload").Base(err)
+		}
+		return transport, nil
+	case methodWS:
+		return c.dialWebSocket(ctx, dialer, false)
+	case methodWSTLS:
+		return c.dialWebSocket(ctx, dialer, true)
+	case methodTLS:
+		return c.dialTLS(ctx, dialer)
+	default: // direct
+		return c.dialTCP(ctx, dialer)
+	}
+}
+
 // getSSHClient returns the live persistent SSH client, establishing
-// it first if needed. The DNSTT session (when configured) is owned
-// by the dnstt dialer and shared across re-establishments.
+// it first if needed.
 func (c *Client) getSSHClient(ctx context.Context, dialer internet.Dialer) (*ssh.Client, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -146,30 +254,9 @@ func (c *Client) getSSHClient(ctx context.Context, dialer internet.Dialer) (*ssh
 	if err != nil {
 		return nil, err
 	}
-	var transport stdnet.Conn
-	if c.dnsttDial != nil {
-		dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
-		defer cancel()
-		transport, err = c.dnsttDial.DialContext(dialCtx, "tcp", c.serverAddr())
-		if err != nil {
-			return nil, errors.New("ssh: dial server through DNSTT").Base(err)
-		}
-	} else {
-		dest := net.Destination{
-			Network: net.Network_TCP,
-			Address: net.ParseAddress(c.config.Address),
-			Port:    net.Port(c.config.Port),
-		}
-		if dest.Port == 0 {
-			dest.Port = 22
-		}
-		if err := retry.ExponentialBackoff(3, 200).On(func() error {
-			var err error
-			transport, err = dialer.Dial(ctx, dest)
-			return err
-		}); err != nil {
-			return nil, errors.New("ssh: dial server").Base(err)
-		}
+	transport, err := c.dialTransport(ctx, dialer)
+	if err != nil {
+		return nil, err
 	}
 	conn, chans, reqs, err := ssh.NewClientConn(transport, c.serverAddr(), sshCfg)
 	if err != nil {

@@ -15,6 +15,12 @@ option java_multiple_files = true;
 // (SlowDNS) session (resolver UDP -> KCP -> Noise_NK -> smux, inner
 // "fixed") instead of a direct TCP dial: the session's streams go to
 // the server's fixed port, which must be the SSH port.
+//
+// The transport method (HTTP Custom style) selects how the SSH
+// server is reached. Empty (or "direct") is a plain TCP dial, the
+// behaviour of older configs. "slowdns" is the DNSTT dial above;
+// when method is empty and dnstt_ns is set, slowdns is implied, so
+// older SlowDNS profiles keep working without a method field.
 message Config {
   // SSH server address (hostname or IP), e.g. "example.com".
   string address = 1;
@@ -42,4 +48,31 @@ message Config {
   // only answer NULL queries (proven by HTTP Custom for one account),
   // so the type must be configurable per server.
   string dnstt_record_type = 10;
+  // Transport method (HTTP Custom style): "" or "direct" (plain TCP
+  // dial, default), "payload" (custom payload over TCP), "ws"
+  // (WebSocket), "ws-tls" (WebSocket over TLS), "tls" (direct TLS
+  // with SNI only), "slowdns" (DNSTT dial). Empty + dnstt_ns set
+  // implies "slowdns".
+  string method = 11;
+  // Custom payload template for method "payload" (HTTP-style). The
+  // placeholders [host] (SSH server host) and [port] (SSH server
+  // port) are substituted; lone LF line endings are normalised to
+  // CRLF before sending, then the SSH handshake follows on the same
+  // connection.
+  string payload = 12;
+  // WebSocket path for methods "ws" and "ws-tls". Empty means "/".
+  string ws_path = 13;
+  // WebSocket Host header for methods "ws" and "ws-tls". Empty means
+  // the SSH server host.
+  string ws_host = 14;
+  // SNI (Server Name Indication) for methods "tls" and "ws-tls".
+  // Empty means the SSH server host.
+  string sni = 15;
+  // TLS version for methods "tls" and "ws-tls": "default" (auto —
+  // let the TLS stack negotiate, no forced version), "tls1",
+  // "tls1.1", "tls1.2", "tls1.3". Empty means "default".
+  string sni_version = 16;
+  // Skip TLS certificate verification for methods "tls" and
+  // "ws-tls" (HTTP Custom "Izinkan koneksi tidak aman").
+  bool insecure = 17;
 }
