@@ -245,15 +245,59 @@ func (d *Dialer) getSession() (*Session, error) {
 	return e.sess, e.err
 }
 
+// parseResolver normalises a user-typed resolver into host and port.
+// Accepts a bare host (default port 53), host:port, and the udp://
+// form standard SlowDNS editors (e.g. HTTP Custom) advertise. The
+// tunnel itself is always plain UDP, so DoH (https://) and DoT
+// (tls://, dot://) URLs are NOT accepted: silently treating one as a
+// plain UDP resolver would mislead the user, so they fail here with
+// a clear error instead. Returns a clear error for genuinely
+// unusable input.
+func parseResolver(resolver string) (host, port string, err error) {
+	s := strings.TrimSpace(resolver)
+	if s == "" {
+		return "1.1.1.1", "53", nil
+	}
+	// A leading scheme is only accepted for plain UDP DNS: "udp://"
+	// must not reach SplitHostPort, which chokes on the "://" (too
+	// many colons) and leaves the whole string as the host, so the
+	// resolver can never be resolved and the session never starts.
+	// Any other scheme (https://, tls://, dot://, tcp://, ...) is a
+	// transport this UDP-only dialer does not speak: fail loudly.
+	if i := strings.Index(s, "://"); i >= 0 {
+		scheme := strings.ToLower(s[:i])
+		if scheme != "udp" {
+			return "", "", errors.New("dnstt: unsupported resolver scheme " + strconv.Quote(scheme) + " (only plain host, host:port or udp:// are supported)")
+		}
+		s = s[i+3:]
+	}
+	// Strip a trailing path, query or fragment ("udp://1.1.1.1:53/").
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", "", errors.New("dnstt: invalid resolver " + resolver)
+	}
+	host, port, err = net.SplitHostPort(s)
+	if err != nil {
+		host, port = s, "53"
+	}
+	if host == "" {
+		return "", "", errors.New("dnstt: invalid resolver " + resolver)
+	}
+	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+		return "", "", errors.New("dnstt: invalid resolver " + resolver)
+	}
+	return host, port, nil
+}
+
 // establish dials a fresh DNSTT session. It must NOT be called with
 // d.mu held: NewSession blocks for the Noise handshake.
 func (d *Dialer) establish() (*Session, net.PacketConn, error) {
-	host, portStr, err := net.SplitHostPort(d.resolver)
+	host, portStr, err := parseResolver(d.resolver)
 	if err != nil {
-		host, portStr = d.resolver, "53"
-	}
-	if port, err := strconv.Atoi(portStr); err != nil || port <= 0 || port > 65535 {
-		return nil, nil, errors.New("dnstt: invalid resolver ", d.resolver)
+		return nil, nil, err
 	}
 	udpAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, portStr))
 	if err != nil {

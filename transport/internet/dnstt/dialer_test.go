@@ -61,6 +61,62 @@ func TestDialContextRespectsContext(t *testing.T) {
 	}
 }
 
+// TestParseResolver proves a user-typed resolver is normalised before
+// the session is established. The standard SlowDNS forms — bare host,
+// host:port and udp:// — all work; a scheme form used to reach
+// establish() verbatim, where SplitHostPort/ResolveUDPAddr choke on
+// the "://", so a filled resolver could never connect while an empty
+// one (default 1.1.1.1:53) worked. DoH/DoT schemes (https://, tls://,
+// dot://) are rejected with a clear error: the dialer is UDP-only and
+// silently treating one as plain UDP would mislead the user.
+func TestParseResolver(t *testing.T) {
+	cases := []struct {
+		in      string
+		host    string
+		port    string
+		wantErr bool
+	}{
+		{"", "1.1.1.1", "53", false},
+		{"1.1.1.1", "1.1.1.1", "53", false},
+		{"1.1.1.1:53", "1.1.1.1", "53", false},
+		{"8.8.8.8", "8.8.8.8", "53", false},
+		{"8.8.8.8:53", "8.8.8.8", "53", false},
+		{"8.8.8.8:5353", "8.8.8.8", "5353", false},
+		{"udp://1.1.1.1:53", "1.1.1.1", "53", false},
+		{"udp://1.1.1.1", "1.1.1.1", "53", false},
+		{"UDP://1.1.1.1:53", "1.1.1.1", "53", false},
+		{"udp://1.1.1.1:53/", "1.1.1.1", "53", false},
+		{"1.1.1.1:53?x=1", "1.1.1.1", "53", false},
+		{"[::1]:53", "::1", "53", false},
+		{"tcp://1.1.1.1:53", "", "", true},
+		{"https://1.1.1.1/dns-query", "", "", true},
+		{"https://dns.google/dns-query", "", "", true},
+		{"tls://1.1.1.1", "", "", true},
+		{"dot://8.8.8.8:853", "", "", true},
+		{"garbage:notaport", "", "", true},
+		{"1.1.1.1:0", "", "", true},
+		{"1.1.1.1:99999", "", "", true},
+		{"://", "", "", true},
+		{":53", "", "", true},
+	}
+	for _, c := range cases {
+		host, port, err := parseResolver(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseResolver(%q): expected error, got host=%q port=%q", c.in, host, port)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseResolver(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if host != c.host || port != c.port {
+			t.Errorf("parseResolver(%q): got host=%q port=%q, want host=%q port=%q", c.in, host, port, c.host, c.port)
+		}
+	}
+}
+
 // TestNewDialerWithRecordType proves the DNS record type flows into
 // the dialer: "null" selects the NULL record type (servers that only
 // answer NULL, e.g. the sshvpn account proven in HTTP Custom), while
