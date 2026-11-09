@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package xray.proxy.ssh;
+option csharp_namespace = "Xray.Proxy.Ssh";
+option go_package = "github.com/xtls/xray-core/proxy/ssh";
+option java_package = "com.xray.proxy.ssh";
+option java_multiple_files = true;
+
+// Config is the configuration of the SSH outbound: a persistent SSH
+// client connection to one server, over which every outbound TCP
+// connection is opened as an SSH direct-tcpip channel (no SOCKS
+// listener, no separate process).
+//
+// When dnstt_ns is set, the SSH server is dialed through a DNSTT
+// (SlowDNS) session (resolver UDP -> KCP -> Noise_NK -> smux, inner
+// "fixed") instead of a direct TCP dial: the session's streams go to
+// the server's fixed port, which must be the SSH port.
+message Config {
+  // SSH server address (hostname or IP), e.g. "example.com".
+  string address = 1;
+  // SSH server port, e.g. 22. 0 means 22.
+  uint32 port = 2;
+  // SSH username.
+  string username = 3;
+  // SSH password (password auth).
+  string password = 4;
+  // PEM-encoded private key (key auth, alternative to password).
+  // Either password or private_key must be set.
+  string private_key = 5;
+  // DNSTT tunnel domain (NS), e.g. "ns.example.com". Empty means no
+  // tunnel: dial the SSH server directly.
+  string dnstt_ns = 6;
+  // DNSTT server public key, 64 hex chars (32 bytes). Required when
+  // dnstt_ns is set.
+  string dnstt_pubkey = 7;
+  // DNS resolver for the DNSTT session, "host:port".
+  // Empty means "1.1.1.1:53".
+  string dnstt_resolver = 8;
+  // DNSTT KCP window. 0 means 512.
+  uint32 dnstt_kcp_window = 9;
+}

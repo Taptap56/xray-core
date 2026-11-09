@@ -5,6 +5,7 @@ go 1.27
 require (
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/bufbuild/protocompile v0.14.1
+	github.com/flynn/noise v1.0.0
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
 	github.com/golang/mock v1.7.0-rc.1
 	github.com/google/go-cmp v0.7.0
@@ -12,6 +13,8 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/cpuid/v2 v2.4.1
 	github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138
+	github.com/metacubex/kcp-go v0.0.0-20260105040817-550693377604
+	github.com/metacubex/smux v0.0.0-20260105030934-d0c8756d3141
 	github.com/miekg/dns v1.1.73
 	github.com/pelletier/go-toml v1.9.5
 	github.com/pion/stun/v3 v3.1.7
@@ -25,7 +28,7 @@ require (
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.58.0
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
-	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842
+	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/net v0.61.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
@@ -47,8 +50,11 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
+	github.com/klauspost/reedsolomon v1.12.3 // indirect
 	github.com/koron/go-ssdp v0.0.4 // indirect
 	github.com/libp2p/go-netroute v0.2.1 // indirect
+	github.com/metacubex/randv2 v0.2.0 // indirect
+	github.com/metacubex/sing v0.5.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/transport/v4 v4.1.0 // indirect
@@ -57,6 +63,7 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
