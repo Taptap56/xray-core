@@ -60,3 +60,42 @@ func TestDialContextRespectsContext(t *testing.T) {
 		t.Fatalf("DialContext took %v, expected it to return on context end", elapsed)
 	}
 }
+
+// TestNewDialerWithRecordType proves the DNS record type flows into
+// the dialer: "null" selects the NULL record type (servers that only
+// answer NULL, e.g. the sshvpn account proven in HTTP Custom), while
+// empty defaults to TXT so existing TXT servers are unaffected.
+func TestNewDialerWithRecordType(t *testing.T) {
+	pubkey := strings.Repeat("01", 32)
+	d, err := NewDialerWithRecordType("ns.example.com", pubkey, "1.1.1.1:53", 512, "null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.recordType != "null" {
+		t.Fatalf("expected record type %q, got %q", "null", d.recordType)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = NewDialerWithRecordType("ns.example.com", pubkey, "1.1.1.1:53", 512, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.recordType != "txt" {
+		t.Fatalf("expected empty record type to default to %q, got %q", "txt", d.recordType)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// NewDialer (no record type) keeps the old default.
+	d, err = NewDialer("ns.example.com", pubkey, "1.1.1.1:53", 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.recordType != "txt" {
+		t.Fatalf("expected NewDialer to default to %q, got %q", "txt", d.recordType)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

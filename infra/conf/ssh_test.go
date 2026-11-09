@@ -39,6 +39,33 @@ func TestSSHConfig(t *testing.T) {
 			},
 		},
 		{
+			// Record type "null" round-trips: servers that only answer
+			// NULL (proven by HTTP Custom for one account) need it.
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 22,
+				"username": "alice",
+				"password": "secret",
+				"dnsttNs": "ns.example.com",
+				"dnsttPubkey": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+				"dnsttResolver": "1.1.1.1:53",
+				"dnsttKcpWindow": 512,
+				"dnsttRecordType": "null"
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:         "ssh.example.com",
+				Port:            22,
+				Username:        "alice",
+				Password:        "secret",
+				DnsttNs:         "ns.example.com",
+				DnsttPubkey:     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+				DnsttResolver:   "1.1.1.1:53",
+				DnsttKcpWindow:  512,
+				DnsttRecordType: "null",
+			},
+		},
+		{
 			// Port 0 defaults to 22; no DNSTT fields means direct dial.
 			Input: `{
 				"address": "10.0.0.1",

@@ -54,8 +54,12 @@ type Config struct {
 	DnsttResolver string `protobuf:"bytes,8,opt,name=dnstt_resolver,json=dnsttResolver,proto3" json:"dnstt_resolver,omitempty"`
 	// DNSTT KCP window. 0 means 512.
 	DnsttKcpWindow uint32 `protobuf:"varint,9,opt,name=dnstt_kcp_window,json=dnsttKcpWindow,proto3" json:"dnstt_kcp_window,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// DNSTT DNS record type: "txt" (default) or "null". Some servers
+	// only answer NULL queries (proven by HTTP Custom for one account),
+	// so the type must be configurable per server.
+	DnsttRecordType string `protobuf:"bytes,10,opt,name=dnstt_record_type,json=dnsttRecordType,proto3" json:"dnstt_record_type,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -151,23 +155,28 @@ func (x *Config) GetDnsttKcpWindow() uint32 {
 	return 0
 }
 
+func (x *Config) GetDnsttRecordType() string {
+	if x != nil {
+		return x.DnsttRecordType
+	}
+	return ""
+}
+
 var File_proxy_ssh_config_proto protoreflect.FileDescriptor
 
 const file_proxy_ssh_config_proto_rawDesc = "" +
-	"\n" +
-	"\x16proxy/ssh/config.proto\x12\x0exray.proxy.ssh\"\x9e\x02\n" +
-	"\x06Config\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1a\n" +
-	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword\x12\x1f\n" +
-	"\vprivate_key\x18\x05 \x01(\tR\n" +
-	"privateKey\x12\x19\n" +
-	"\bdnstt_ns\x18\x06 \x01(\tR\adnsttNs\x12!\n" +
-	"\fdnstt_pubkey\x18\a \x01(\tR\vdnsttPubkey\x12%\n" +
-	"\x0ednstt_resolver\x18\b \x01(\tR\rdnsttResolver\x12(\n" +
-	"\x10dnstt_kcp_window\x18\t \x01(\rR\x0ednsttKcpWindowBL\n" +
-	"\x12com.xray.proxy.sshP\x01Z#github.com/xtls/xray-core/proxy/ssh\xaa\x02\x0eXray.Proxy.Sshb\x06proto3"
+	"\n\x16proxy/ssh/config.proto\x12\x0exray.proxy.ssh" +
+	"\"\xca\x02\n\x06Config\x12\x18\n\x07address\x18\x01 \x01(\tR\x07address\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x0dR\x04port\x12\x1a\n\x08username\x18\x03 \x01(\tR\x08use" +
+	"rname\x12\x1a\n\x08password\x18\x04 \x01(\tR\x08password\x12\x1f\n\x0bpri" +
+	"vate_key\x18\x05 \x01(\tR\nprivateKey\x12\x19\n\x08dnstt_ns\x18\x06" +
+	" \x01(\tR\x07dnsttNs\x12!\n\x0cdnstt_pubkey\x18\x07 \x01(\tR\x0bdns" +
+	"ttPubkey\x12%\n\x0ednstt_resolver\x18\x08 \x01(\tR\x0ddnsttR" +
+	"esolver\x12(\n\x10dnstt_kcp_window\x18\t \x01(\x0dR\x0ednstt" +
+	"KcpWindow\x12*\n\x11dnstt_record_type\x18\n \x01(\tR\x0fdn" +
+	"sttRecordTypeBL\n\x12com.xray.proxy.sshP\x01Z#g" +
+	"ithub.com/xtls/xray-core/proxy/ssh\xaa\x02\x0eXra" +
+	"y.Proxy.Sshb\x06proto3"
 
 var (
 	file_proxy_ssh_config_proto_rawDescOnce sync.Once

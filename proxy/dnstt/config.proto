@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package xray.proxy.dnstt;
+option csharp_namespace = "Xray.Proxy.Dnstt";
+option go_package = "github.com/xtls/xray-core/proxy/dnstt";
+option java_package = "com.xray.proxy.dnstt";
+option java_multiple_files = true;
+
+// Config is the configuration of the DNSTT (SlowDNS) outbound: a
+// dialerProxy that carries a connection through ONE shared DNSTT
+// session (resolver UDP -> KCP -> Noise_NK -> smux, inner "fixed")
+// to the server's fixed port. It has no destination of its own:
+// the caller (e.g. a VMess/VLESS outbound dialing its server via
+// streamSettings.sockopt.dialerProxy) supplies the target, and the
+// DNSTT session forwards every stream to the fixed port the
+// dnstt-server was started with, which must be that server's
+// inbound port.
+//
+// The config is the same tunnel the dnstt dialer
+// (transport/internet/dnstt) uses for the SSH outbound, factored
+// out as an outbound so any protocol can dial through it without a
+// separate process or SOCKS hop.
+message Config {
+  // DNSTT tunnel domain (NS), e.g. "ns.example.com".
+  string ns = 1;
+  // DNSTT server public key, 64 hex chars (32 bytes).
+  string pubkey = 2;
+  // DNS resolver for the DNSTT session, "host:port".
+  // Empty means "1.1.1.1:53".
+  string resolver = 3;
+  // DNSTT KCP window. 0 means 512.
+  uint32 kcp_window = 4;
+  // DNSTT DNS record type: "txt" (default) or "null". Some servers
+  // only answer NULL queries (proven by HTTP Custom for one account),
+  // so the type must be configurable per server.
+  string record_type = 5;
+}

@@ -88,7 +88,7 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 	}
 	c := &Client{config: config}
 	if strings.TrimSpace(config.DnsttNs) != "" {
-		dialer, err := dnstt.NewDialer(config.DnsttNs, config.DnsttPubkey, config.DnsttResolver, int(config.DnsttKcpWindow))
+		dialer, err := dnstt.NewDialerWithRecordType(config.DnsttNs, config.DnsttPubkey, config.DnsttResolver, int(config.DnsttKcpWindow), config.DnsttRecordType)
 		if err != nil {
 			return nil, errors.New("ssh: invalid DNSTT settings").Base(err)
 		}

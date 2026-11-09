@@ -38,4 +38,8 @@ message Config {
   string dnstt_resolver = 8;
   // DNSTT KCP window. 0 means 512.
   uint32 dnstt_kcp_window = 9;
+  // DNSTT DNS record type: "txt" (default) or "null". Some servers
+  // only answer NULL queries (proven by HTTP Custom for one account),
+  // so the type must be configurable per server.
+  string dnstt_record_type = 10;
 }
