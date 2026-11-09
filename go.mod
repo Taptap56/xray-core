@@ -11,7 +11,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/klauspost/cpuid/v2 v2.4.1
+	github.com/klauspost/cpuid/v2 v2.4.2
 	github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138
 	github.com/metacubex/kcp-go v0.0.0-20260105040817-550693377604
 	github.com/metacubex/smux v0.0.0-20260105030934-d0c8756d3141
