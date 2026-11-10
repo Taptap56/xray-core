@@ -27,10 +27,11 @@ func TestSubstitutePayload(t *testing.T) {
 		t.Fatalf("port 0 = %q, want %q", got, want)
 	}
 
-	// No placeholders: only the line endings change.
+	// No placeholders: the line endings change, and the blank
+	// line is appended (a payload must end with "\r\n\r\n").
 	got = substitutePayload("HELLO\n", "example.com", 22)
-	if got != "HELLO\r\n" {
-		t.Fatalf("no placeholders = %q, want %q", got, "HELLO\r\n")
+	if got != "HELLO\r\n\r\n" {
+		t.Fatalf("no placeholders = %q, want %q", got, "HELLO\r\n\r\n")
 	}
 
 	// HC-style line-ending placeholders: [crlf] becomes a real
@@ -41,7 +42,7 @@ func TestSubstitutePayload(t *testing.T) {
 		t.Fatalf("[crlf] = %q, want %q", got, want)
 	}
 	got = substitutePayload("A[lf]B[cr]C", "example.com", 22)
-	want = "A\r\nB\rC"
+	want = "A\r\nB\rC\r\n\r\n"
 	if got != want {
 		t.Fatalf("[lf]/[cr] = %q, want %q", got, want)
 	}
@@ -54,8 +55,32 @@ func TestSubstitutePayload(t *testing.T) {
 	if strings.Contains(got, "[ua]") {
 		t.Fatalf("[ua] survived: %q", got)
 	}
-	if got != "User-Agent: "+wantUA+"\r\n" {
-		t.Fatalf("[ua] = %q, want %q", got, "User-Agent: "+wantUA+"\r\n")
+	if got != "User-Agent: "+wantUA+"\r\n\r\n" {
+		t.Fatalf("[ua] = %q, want %q", got, "User-Agent: "+wantUA+"\r\n\r\n")
+	}
+
+	// [protocol] becomes the HTTP version.
+	got = substitutePayload("GET / [protocol]\r\nHost: [host]\r\n\r\n", "example.com", 22)
+	want = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+	if got != want {
+		t.Fatalf("[protocol] = %q, want %q", got, want)
+	}
+
+	// Auto-append: a payload without a trailing blank line gets
+	// "\r\n\r\n" appended (trailing line endings trimmed first,
+	// so no triple blank line).
+	got = substitutePayload("GET / HTTP/1.1\r\nHost: [host]\r\n", "example.com", 22)
+	want = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+	if got != want {
+		t.Fatalf("auto-append = %q, want %q", got, want)
+	}
+	// Already ending with a blank line (even an extra one): left
+	// alone — the append only fires when there is no trailing
+	// blank line at all, exactly like TaptapBox.
+	got = substitutePayload("GET / HTTP/1.1\r\nHost: [host]\r\n\r\n\r\n", "example.com", 22)
+	want = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n\r\n"
+	if got != want {
+		t.Fatalf("already terminated = %q, want %q", got, want)
 	}
 
 	// Placeholders are case-insensitive ([CRLF], [UA]).

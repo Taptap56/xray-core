@@ -11,17 +11,26 @@
 // instead of a direct TCP dial: the session's streams go to the
 // server's fixed port, which must be the SSH port.
 //
-// The transport is built by stacking independent HTTP Custom style
-// layers (each a boolean flag; several may be on at once): a remote
-// HTTP CONNECT proxy as the first hop, the DNSTT dial, a custom
-// payload (fire-and-forget), the enhanced layer (payload + read the
-// server's response headers), and a TLS handshake with SNI. With no
-// layer on, the server is dialed directly over TCP, the behaviour
-// of older configs. No layer flag set + DNSTT settings implies the
-// slowdns layer, so older SlowDNS profiles keep working.
+// The transport is one payload chain (chain.go), the HC way of
+// working: the remote proxy, when set, is dialed as a plain TCP
+// target — NO CONNECT is sent; the payload goes to the proxy
+// directly, one HTTP request at a time, one HTTP response per
+// request — then TLS (when on, before the payload), and the
+// server's first bytes decide the framing (a raw SSH banner, or WS
+// frames). The DNSTT dial replaces the direct TCP dial when the
+// slowdns layer is on. With no layer on, the server is dialed
+// directly over TCP, the behaviour of older configs. No layer flag
+// set + DNSTT settings implies the slowdns layer, so older
+// SlowDNS profiles keep working.
 //
 // There is no WebSocket dial: HTTP Custom has no WS transport for
-// SSH, and a WebSocket upgrade is sent as a payload instead.
+// SSH, and a WebSocket upgrade is sent as a payload instead. The
+// old HTTP CONNECT proxy dial is gone — Cloudflare rejects CONNECT
+// with 400, while a payload sent to the proxy plainly is answered
+// 301 then 101 then raw SSH. The old Enhanced layer is gone too:
+// the chain reads one response per payload request, which is what
+// Enhanced did; use_enhanced stays accepted (UI compat) but has no
+// separate behaviour.
 //
 // Limitations (by protocol design, not by implementation):
 //   - TCP only. SSH direct-tcpip has no UDP channel, so UDP
@@ -36,7 +45,6 @@ package ssh
 
 import (
 	"context"
-	"crypto/tls"
 	stdnet "net"
 	"strings"
 	"sync"
@@ -48,7 +56,6 @@ import (
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/retry"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/common/task"
@@ -174,104 +181,16 @@ func (c *Client) sshClientConfig() (*ssh.ClientConfig, error) {
 	return cfg, nil
 }
 
-// dialTCP dials the SSH server directly (plain TCP) through the
-// core dialer, with the same retry as before.
-func (c *Client) dialTCP(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
-	dest := net.Destination{
-		Network: net.Network_TCP,
-		Address: net.ParseAddress(c.config.Address),
-		Port:    net.Port(c.config.Port),
-	}
-	if dest.Port == 0 {
-		dest.Port = 22
-	}
-	var transport stdnet.Conn
-	if err := retry.ExponentialBackoff(3, 200).On(func() error {
-		var err error
-		transport, err = dialer.Dial(ctx, dest)
-		return err
-	}); err != nil {
-		return nil, errors.New("ssh: dial server").Base(err)
-	}
-	return transport, nil
-}
-
-// wrapTLS performs the TLS layer's handshake over the established
-// transport: SNI (default: SSH server host), the insecure toggle
-// and the SNI version.
-func (c *Client) wrapTLS(ctx context.Context, raw stdnet.Conn) (stdnet.Conn, error) {
-	tlsCfg, err := buildTLSConfig(c.effectiveSNI(), c.config.SniVersion, c.config.Insecure)
-	if err != nil {
-		raw.Close()
-		return nil, err
-	}
-	tlsConn := tls.Client(raw, tlsCfg)
-	dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(dialCtx); err != nil {
-		raw.Close()
-		return nil, errors.New("ssh: TLS handshake with server").Base(err)
-	}
-	return tlsConn, nil
-}
-
-// dialTransport builds the transport to the SSH server by stacking
-// the HTTP Custom layers, in order, and returns the raw connection
-// over which the SSH handshake runs:
-//  1. Base transport: the remote proxy's CONNECT tunnel, the DNSTT
-//     dial, or a direct TCP dial.
-//  2. Payload layer (payload, or enhanced which also sends it):
-//     write the custom payload.
-//  3. Enhanced layer: briefly read the server's reply to the
-//     payload, best-effort — a real SSH server answers with its
-//     version banner, not HTTP headers, so a missing or non-HTTP
-//     reply must not fail the dial.
-//  4. TLS layer: TLS handshake with SNI.
-//
-// With no layer on this is a plain TCP dial. The DNSTT session
-// (when used) is owned by the dnstt dialer and shared across
-// re-establishments.
+// dialTransport builds the transport to the SSH server through the
+// payload chain (chain.go) and returns the connection over which
+// the SSH handshake runs. The order changed with the chain: TLS
+// (when on) now handshakes BEFORE the payload is sent, not after
+// — the payload travels inside the TLS tunnel when TLS is on, the
+// way HC and TaptapBox do it. With no layer on this is a plain TCP
+// dial. The DNSTT session (when used) is owned by the dnstt dialer
+// and shared across re-establishments.
 func (c *Client) dialTransport(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
-	var transport stdnet.Conn
-	var err error
-	if strings.TrimSpace(c.config.RemoteProxy) != "" {
-		transport, err = c.dialProxy(ctx, dialer)
-	} else if c.effectiveSlowDns() {
-		dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
-		defer cancel()
-		transport, err = c.dnsttDial.DialContext(dialCtx, "tcp", c.serverAddr())
-		if err != nil {
-			return nil, errors.New("ssh: dial server through DNSTT").Base(err)
-		}
-	} else {
-		transport, err = c.dialTCP(ctx, dialer)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if c.effectiveSendPayload() {
-		payload := substitutePayload(c.config.Payload, c.config.Address, c.config.Port)
-		if _, err := transport.Write([]byte(payload)); err != nil {
-			transport.Close()
-			return nil, errors.New("ssh: send payload").Base(err)
-		}
-	}
-	if c.config.UseEnhanced {
-		// The Enhanced layer waits briefly for the server's reply
-		// to the payload, best-effort: a real SSH server answers
-		// with its version banner, not HTTP headers, so a missing
-		// or non-HTTP reply must not fail the dial — the handshake
-		// surfaces a dead peer. Bytes already read stay buffered
-		// for the handshake.
-		transport = readEnhancedResponse(ctx, transport)
-	}
-	if c.config.UseTls {
-		transport, err = c.wrapTLS(ctx, transport)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return transport, nil
+	return c.dialChain(ctx, dialer)
 }
 
 // getSSHClient returns the live persistent SSH client, establishing

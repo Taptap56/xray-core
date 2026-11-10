@@ -39,6 +39,17 @@ func tlsVersionRange(version string) (min, max uint16, err error) {
 	}
 }
 
+// isTLSVersionAuto reports whether the SNI version is auto
+// ("default"/""): no forced TLS version, the stack negotiates.
+// The TLS -> plain fallback ONLY applies in this mode. When a
+// version is forced explicitly, a failed handshake must stay
+// failed, not silently turn plain — otherwise a forced-1.3 test
+// against a plain server would falsely pass via the plain path.
+func isTLSVersionAuto(version string) bool {
+	v := strings.ToLower(strings.TrimSpace(version))
+	return v == "" || v == sniVersionDefault
+}
+
 // buildTLSConfig builds the TLS client config for the TLS layer:
 // SNI (default: the SSH server host), the insecure (skip-verify)
 // toggle, and the SNI version as min/max.
