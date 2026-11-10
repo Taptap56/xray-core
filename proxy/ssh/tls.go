@@ -7,16 +7,6 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 )
 
-// SSH method names (Config.Method). Empty means "direct".
-const (
-	methodDirect  = "direct"
-	methodPayload = "payload"
-	methodWS      = "ws"
-	methodWSTLS   = "ws-tls"
-	methodTLS     = "tls"
-	methodSlowDNS = "slowdns"
-)
-
 // SNI version names (Config.SniVersion). "default" (and empty) means
 // auto: no forced TLS version, the stack negotiates.
 const (
@@ -49,9 +39,9 @@ func tlsVersionRange(version string) (min, max uint16, err error) {
 	}
 }
 
-// buildTLSConfig builds the TLS client config for the "tls" and
-// "ws-tls" methods: SNI (default: the SSH server host), the
-// insecure (skip-verify) toggle, and the SNI version as min/max.
+// buildTLSConfig builds the TLS client config for the TLS layer:
+// SNI (default: the SSH server host), the insecure (skip-verify)
+// toggle, and the SNI version as min/max.
 func buildTLSConfig(sni, sniVersion string, insecure bool) (*tls.Config, error) {
 	min, max, err := tlsVersionRange(sniVersion)
 	if err != nil {
@@ -74,16 +64,26 @@ func (c *Client) effectiveSNI() string {
 	return c.config.Address
 }
 
-// effectiveMethod resolves the transport method: an explicit method
-// wins; empty + DNSTT settings implies slowdns (older SlowDNS
-// profiles have no method field); otherwise direct.
-func (c *Client) effectiveMethod() string {
-	m := strings.ToLower(strings.TrimSpace(c.config.Method))
-	if m != "" {
-		return m
+// effectiveSlowDns reports whether the SSH server is dialed
+// through DNSTT: the slowdns layer, or (legacy) no layer flag set
+// with DNSTT settings present, so older SlowDNS profiles keep
+// working without layer flags. Note proto3 bools cannot tell
+// "explicitly off" from "unset", so this implication must only
+// fire for genuine legacy configs: the app gates dnstt_ns on its
+// own slowdns check and never sends it with all layers off.
+func (c *Client) effectiveSlowDns() bool {
+	if c.config.UseSlowdns {
+		return true
 	}
-	if c.dnsttDial != nil {
-		return methodSlowDNS
+	if c.config.UsePayload || c.config.UseEnhanced || c.config.UseTls || c.config.UseSlowdns {
+		return false
 	}
-	return methodDirect
+	return strings.TrimSpace(c.config.DnsttNs) != ""
+}
+
+// effectiveSendPayload reports whether a payload is sent: the
+// payload layer, or the enhanced layer (which sends the payload
+// and then waits for the server's response headers).
+func (c *Client) effectiveSendPayload() bool {
+	return c.config.UsePayload || c.config.UseEnhanced
 }

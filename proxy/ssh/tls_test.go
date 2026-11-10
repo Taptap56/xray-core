@@ -78,21 +78,49 @@ func TestBuildTLSConfig(t *testing.T) {
 	}
 }
 
-func TestEffectiveMethod(t *testing.T) {
-	// Empty method, no DNSTT: direct.
+func TestEffectiveSlowDns(t *testing.T) {
+	// No layers, no DNSTT settings: direct dial.
 	c := &Client{config: &Config{Address: "example.com"}}
-	if got := c.effectiveMethod(); got != methodDirect {
-		t.Errorf("empty method = %q, want %q", got, methodDirect)
+	if c.effectiveSlowDns() {
+		t.Error("no layers + no NS: expected direct, got slowdns")
 	}
-	// Explicit methods pass through (case-insensitive, trimmed).
-	for _, m := range []string{"payload", "ws", "ws-tls", "tls", "slowdns", "direct"} {
-		c.config.Method = m
-		if got := c.effectiveMethod(); got != m {
-			t.Errorf("method %q = %q, want %q", m, got, m)
-		}
+	// SlowDNS layer on: DNSTT.
+	c.config.UseSlowdns = true
+	if !c.effectiveSlowDns() {
+		t.Error("slowdns layer on: expected slowdns")
 	}
-	c.config.Method = " WS-TLS "
-	if got := c.effectiveMethod(); got != methodWSTLS {
-		t.Errorf("method with spaces/case = %q, want %q", got, methodWSTLS)
+	// Legacy: no layer flag set, DNSTT settings present: DNSTT.
+	c.config.UseSlowdns = false
+	c.config.DnsttNs = "ns.example.com"
+	if !c.effectiveSlowDns() {
+		t.Error("no layers + NS set: expected slowdns (legacy)")
+	}
+	// Another layer on + DNSTT settings present: that layer wins,
+	// DNSTT is NOT implied (stale DNSTT fields must not hijack).
+	c.config.UseTls = true
+	if c.effectiveSlowDns() {
+		t.Error("tls layer on + NS set: expected direct, got slowdns")
+	}
+}
+
+func TestEffectiveSendPayload(t *testing.T) {
+	c := &Client{config: &Config{Address: "example.com"}}
+	if c.effectiveSendPayload() {
+		t.Error("no layers: expected no payload")
+	}
+	c.config.UsePayload = true
+	if !c.effectiveSendPayload() {
+		t.Error("payload layer on: expected payload sent")
+	}
+	c.config.UsePayload = false
+	c.config.UseEnhanced = true
+	if !c.effectiveSendPayload() {
+		t.Error("enhanced layer on: expected payload sent")
+	}
+	// TLS alone does not send a payload.
+	c.config.UseEnhanced = false
+	c.config.UseTls = true
+	if c.effectiveSendPayload() {
+		t.Error("tls layer only: expected no payload")
 	}
 }

@@ -11,11 +11,17 @@
 // instead of a direct TCP dial: the session's streams go to the
 // server's fixed port, which must be the SSH port.
 //
-// The transport method (Config.Method, HTTP Custom style) selects
-// how the server is reached: direct TCP (default), a custom payload
-// over TCP, WebSocket, WebSocket over TLS, direct TLS with SNI only,
-// or the DNSTT dial above. Empty method + DNSTT settings implies
-// slowdns, so older SlowDNS profiles keep working.
+// The transport is built by stacking independent HTTP Custom style
+// layers (each a boolean flag; several may be on at once): a remote
+// HTTP CONNECT proxy as the first hop, the DNSTT dial, a custom
+// payload (fire-and-forget), the enhanced layer (payload + read the
+// server's response headers), and a TLS handshake with SNI. With no
+// layer on, the server is dialed directly over TCP, the behaviour
+// of older configs. No layer flag set + DNSTT settings implies the
+// slowdns layer, so older SlowDNS profiles keep working.
+//
+// There is no WebSocket dial: HTTP Custom has no WS transport for
+// SSH, and a WebSocket upgrade is sent as a payload instead.
 //
 // Limitations (by protocol design, not by implementation):
 //   - TCP only. SSH direct-tcpip has no UDP channel, so UDP
@@ -80,42 +86,49 @@ type Client struct {
 // NewClient creates an SSH outbound handler from its config. It
 // validates the settings but does not dial anything yet: the SSH
 // connection is established lazily on the first Process call.
-func NewClient(ctx context.Context, config *Config) (*Client, error) {
+// validateConfig checks the layer flags and their prerequisites.
+// It is called by NewClient before the core context is touched, so
+// it can be unit-tested without a core instance.
+func validateConfig(config *Config) error {
 	if config == nil {
-		return nil, errors.New("ssh: nil config")
+		return errors.New("ssh: nil config")
 	}
 	if strings.TrimSpace(config.Address) == "" {
-		return nil, errors.New("ssh: empty server address")
+		return errors.New("ssh: empty server address")
 	}
 	if strings.TrimSpace(config.Username) == "" {
-		return nil, errors.New("ssh: empty username")
+		return errors.New("ssh: empty username")
 	}
 	if config.Password == "" && strings.TrimSpace(config.PrivateKey) == "" {
-		return nil, errors.New("ssh: either password or private_key must be set")
+		return errors.New("ssh: either password or private_key must be set")
 	}
-	method := strings.ToLower(strings.TrimSpace(config.Method))
-	switch method {
-	case "", methodDirect, methodPayload, methodWS, methodWSTLS, methodTLS, methodSlowDNS:
-		// Known methods ("" is direct).
-	default:
-		return nil, errors.New("ssh: unknown method ", config.Method)
+	if (config.UsePayload || config.UseEnhanced) && strings.TrimSpace(config.Payload) == "" {
+		return errors.New("ssh: payload layer needs a payload")
 	}
-	if method == methodPayload && strings.TrimSpace(config.Payload) == "" {
-		return nil, errors.New("ssh: method \"payload\" needs a payload")
-	}
-	if method == methodSlowDNS && strings.TrimSpace(config.DnsttNs) == "" {
-		return nil, errors.New("ssh: method \"slowdns\" needs dnstt_ns")
+	if config.UseSlowdns && strings.TrimSpace(config.DnsttNs) == "" {
+		return errors.New("ssh: slowdns layer needs dnstt_ns")
 	}
 	if _, _, err := tlsVersionRange(config.SniVersion); err != nil {
+		return err
+	}
+	if strings.TrimSpace(config.RemoteProxy) != "" {
+		if _, _, _, _, err := parseRemoteProxy(config.RemoteProxy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func NewClient(ctx context.Context, config *Config) (*Client, error) {
+	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
 	c := &Client{config: config}
-	// The DNSTT dialer is created only when the effective method
-	// uses it: explicit "slowdns", or empty method with DNSTT
-	// settings (older SlowDNS profiles have no method field). A
-	// profile that picks payload/ws/tls keeps stale DNSTT fields
-	// without them breaking the client.
-	if method == methodSlowDNS || (method == "" && strings.TrimSpace(config.DnsttNs) != "") {
+	// The DNSTT dialer is created only when the transport uses it:
+	// the slowdns layer, or (legacy) no layer flag set with DNSTT
+	// settings present. A profile with other layers on keeps stale
+	// DNSTT fields without them breaking the client.
+	if c.effectiveSlowDns() {
 		dialer, err := dnstt.NewDialerWithRecordType(config.DnsttNs, config.DnsttPubkey, config.DnsttResolver, int(config.DnsttKcpWindow), config.DnsttRecordType)
 		if err != nil {
 			return nil, errors.New("ssh: invalid DNSTT settings").Base(err)
@@ -183,14 +196,10 @@ func (c *Client) dialTCP(ctx context.Context, dialer internet.Dialer) (stdnet.Co
 	return transport, nil
 }
 
-// dialTLS dials the SSH server over direct TLS (SNI only, no
-// payload, no WebSocket): TCP dial, then a TLS handshake with the
-// effective SNI, the insecure toggle and the SNI version.
-func (c *Client) dialTLS(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
-	raw, err := c.dialTCP(ctx, dialer)
-	if err != nil {
-		return nil, err
-	}
+// wrapTLS performs the TLS layer's handshake over the established
+// transport: SNI (default: SSH server host), the insecure toggle
+// and the SNI version.
+func (c *Client) wrapTLS(ctx context.Context, raw stdnet.Conn) (stdnet.Conn, error) {
 	tlsCfg, err := buildTLSConfig(c.effectiveSNI(), c.config.SniVersion, c.config.Insecure)
 	if err != nil {
 		raw.Close()
@@ -206,40 +215,63 @@ func (c *Client) dialTLS(ctx context.Context, dialer internet.Dialer) (stdnet.Co
 	return tlsConn, nil
 }
 
-// dialTransport dials the transport to the SSH server according to
-// the effective method, and returns the raw connection over which
-// the SSH handshake runs. The DNSTT session (when used) is owned by
-// the dnstt dialer and shared across re-establishments.
+// dialTransport builds the transport to the SSH server by stacking
+// the HTTP Custom layers, in order, and returns the raw connection
+// over which the SSH handshake runs:
+//  1. Base transport: the remote proxy's CONNECT tunnel, the DNSTT
+//     dial, or a direct TCP dial.
+//  2. Payload layer (payload, or enhanced which also sends it):
+//     write the custom payload.
+//  3. Enhanced layer: read and discard the server's HTTP response
+//     headers before proceeding.
+//  4. TLS layer: TLS handshake with SNI.
+//
+// With no layer on this is a plain TCP dial. The DNSTT session
+// (when used) is owned by the dnstt dialer and shared across
+// re-establishments.
 func (c *Client) dialTransport(ctx context.Context, dialer internet.Dialer) (stdnet.Conn, error) {
-	switch c.effectiveMethod() {
-	case methodSlowDNS:
+	var transport stdnet.Conn
+	var err error
+	if strings.TrimSpace(c.config.RemoteProxy) != "" {
+		transport, err = c.dialProxy(ctx, dialer)
+	} else if c.effectiveSlowDns() {
 		dialCtx, cancel := context.WithTimeout(ctx, sshHandshakeTimeout)
 		defer cancel()
-		transport, err := c.dnsttDial.DialContext(dialCtx, "tcp", c.serverAddr())
+		transport, err = c.dnsttDial.DialContext(dialCtx, "tcp", c.serverAddr())
 		if err != nil {
 			return nil, errors.New("ssh: dial server through DNSTT").Base(err)
 		}
-		return transport, nil
-	case methodPayload:
-		transport, err := c.dialTCP(ctx, dialer)
-		if err != nil {
-			return nil, err
-		}
+	} else {
+		transport, err = c.dialTCP(ctx, dialer)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if c.effectiveSendPayload() {
 		payload := substitutePayload(c.config.Payload, c.config.Address, c.config.Port)
 		if _, err := transport.Write([]byte(payload)); err != nil {
 			transport.Close()
 			return nil, errors.New("ssh: send payload").Base(err)
 		}
-		return transport, nil
-	case methodWS:
-		return c.dialWebSocket(ctx, dialer, false)
-	case methodWSTLS:
-		return c.dialWebSocket(ctx, dialer, true)
-	case methodTLS:
-		return c.dialTLS(ctx, dialer)
-	default: // direct
-		return c.dialTCP(ctx, dialer)
 	}
+	if c.config.UseEnhanced {
+		// The Enhanced layer only waits for the response; its
+		// status is not checked.
+		var enhancedConn stdnet.Conn
+		enhancedConn, _, err = readHTTPResponseHeaders(ctx, transport)
+		if err != nil {
+			transport.Close()
+			return nil, errors.New("ssh: read enhanced response").Base(err)
+		}
+		transport = enhancedConn
+	}
+	if c.config.UseTls {
+		transport, err = c.wrapTLS(ctx, transport)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return transport, nil
 }
 
 // getSSHClient returns the live persistent SSH client, establishing

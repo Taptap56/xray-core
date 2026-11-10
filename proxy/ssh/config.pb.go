@@ -3,12 +3,6 @@
 // 	protoc-gen-go v1.36.12
 // 	protoc        v6.31.1
 // source: proxy/ssh/config.proto
-//
-// NOTE: regenerated without protoc — the raw descriptor below was
-// produced by a throwaway descriptorpb program (cmd-descgen-tmp,
-// deleted after use) and validated first by rebuilding the current
-// 10-field descriptor byte-identical to protoc's rawDesc.
-// Regenerate with protoc if the .proto changes.
 
 package ssh
 
@@ -36,6 +30,27 @@ const (
 // (SlowDNS) session (resolver UDP -> KCP -> Noise_NK -> smux, inner
 // "fixed") instead of a direct TCP dial: the session's streams go to
 // the server's fixed port, which must be the SSH port.
+//
+// The transport is built by stacking independent HTTP Custom style
+// layers (each a boolean flag; several may be on at once):
+//   - remote_proxy: the first hop, an HTTP CONNECT proxy (host:port,
+//     optional user:pass@ prefix). The CONNECT runs over the DNSTT
+//     tunnel when use_slowdns is on, else over direct TCP.
+//   - use_slowdns: dial through the DNSTT session above.
+//   - use_payload: send the custom payload template ([host]/[port],
+//     LF normalised to CRLF) over the connection, fire-and-forget.
+//   - use_enhanced: like use_payload, but then read and discard the
+//     server's HTTP response headers before proceeding.
+//   - use_tls: TLS handshake with SNI (default: SSH server host),
+//     SNI version and the insecure toggle.
+//
+// With no layer on, the server is dialed directly over TCP, the
+// behaviour of older configs. When no layer flag is set and
+// dnstt_ns is set, use_slowdns is implied, so older SlowDNS
+// profiles keep working without layer flags.
+//
+// There is no WebSocket dial: HTTP Custom has no WS transport for
+// SSH, and a WebSocket upgrade is sent as a payload instead.
 type Config struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// SSH server address (hostname or IP), e.g. "example.com".
@@ -64,33 +79,41 @@ type Config struct {
 	// only answer NULL queries (proven by HTTP Custom for one account),
 	// so the type must be configurable per server.
 	DnsttRecordType string `protobuf:"bytes,10,opt,name=dnstt_record_type,json=dnsttRecordType,proto3" json:"dnstt_record_type,omitempty"`
-	// Transport method (HTTP Custom style): "" or "direct" (plain TCP
-	// dial, default), "payload" (custom payload over TCP), "ws"
-	// (WebSocket), "ws-tls" (WebSocket over TLS), "tls" (direct TLS
-	// with SNI only), "slowdns" (DNSTT dial). Empty + dnstt_ns set
-	// implies "slowdns".
-	Method string `protobuf:"bytes,11,opt,name=method,proto3" json:"method,omitempty"`
-	// Custom payload template for method "payload" (HTTP-style). The
-	// placeholders [host] (SSH server host) and [port] (SSH server
-	// port) are substituted; lone LF line endings are normalised to
-	// CRLF before sending, then the SSH handshake follows on the same
-	// connection.
+	// Custom payload template for the payload/enhanced layers
+	// (HTTP-style). The placeholders [host] (SSH server host) and
+	// [port] (SSH server port) are substituted; lone LF line endings
+	// are normalised to CRLF before sending, then the SSH handshake
+	// follows on the same connection.
 	Payload string `protobuf:"bytes,12,opt,name=payload,proto3" json:"payload,omitempty"`
-	// WebSocket path for methods "ws" and "ws-tls". Empty means "/".
-	WsPath string `protobuf:"bytes,13,opt,name=ws_path,json=wsPath,proto3" json:"ws_path,omitempty"`
-	// WebSocket Host header for methods "ws" and "ws-tls". Empty means
-	// the SSH server host.
-	WsHost string `protobuf:"bytes,14,opt,name=ws_host,json=wsHost,proto3" json:"ws_host,omitempty"`
-	// SNI (Server Name Indication) for methods "tls" and "ws-tls".
-	// Empty means the SSH server host.
+	// SNI (Server Name Indication) for the TLS layer. Empty means the
+	// SSH server host.
 	Sni string `protobuf:"bytes,15,opt,name=sni,proto3" json:"sni,omitempty"`
-	// TLS version for methods "tls" and "ws-tls": "default" (auto —
-	// let the TLS stack negotiate, no forced version), "tls1",
-	// "tls1.1", "tls1.2", "tls1.3". Empty means "default".
+	// TLS version for the TLS layer: "default" (auto — let the TLS
+	// stack negotiate, no forced version), "tls1", "tls1.1", "tls1.2",
+	// "tls1.3". Empty means "default".
 	SniVersion string `protobuf:"bytes,16,opt,name=sni_version,json=sniVersion,proto3" json:"sni_version,omitempty"`
-	// Skip TLS certificate verification for methods "tls" and
-	// "ws-tls" (HTTP Custom "Izinkan koneksi tidak aman").
-	Insecure      bool `protobuf:"varint,17,opt,name=insecure,proto3" json:"insecure,omitempty"`
+	// Skip TLS certificate verification for the TLS layer (HTTP Custom
+	// "Izinkan koneksi tidak aman").
+	Insecure bool `protobuf:"varint,17,opt,name=insecure,proto3" json:"insecure,omitempty"`
+	// Payload layer (HTTP Custom "Payload"): send the payload template
+	// over the connection, fire-and-forget.
+	UsePayload bool `protobuf:"varint,18,opt,name=use_payload,json=usePayload,proto3" json:"use_payload,omitempty"`
+	// Enhanced layer (HTTP Custom "Enhanced"): like the payload layer,
+	// but then read and discard the server's HTTP response headers
+	// before proceeding.
+	UseEnhanced bool `protobuf:"varint,19,opt,name=use_enhanced,json=useEnhanced,proto3" json:"use_enhanced,omitempty"`
+	// TLS layer (HTTP Custom "TLS"): TLS handshake with SNI, SNI
+	// version and the insecure toggle.
+	UseTls bool `protobuf:"varint,20,opt,name=use_tls,json=useTls,proto3" json:"use_tls,omitempty"`
+	// SlowDNS layer (HTTP Custom "SlowDNS"): dial through the DNSTT
+	// session. When no layer flag is set and dnstt_ns is set, this is
+	// implied.
+	UseSlowdns bool `protobuf:"varint,21,opt,name=use_slowdns,json=useSlowdns,proto3" json:"use_slowdns,omitempty"`
+	// Remote proxy (HTTP Custom "Proxy jarak jauh"): an HTTP CONNECT
+	// proxy, "host:port" with an optional "user:pass@" prefix
+	// (IPv6: "[2001:db8::1]:80"). The first hop when set; the CONNECT
+	// runs over the DNSTT tunnel when use_slowdns is on.
+	RemoteProxy   string `protobuf:"bytes,22,opt,name=remote_proxy,json=remoteProxy,proto3" json:"remote_proxy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,30 +218,9 @@ func (x *Config) GetDnsttRecordType() string {
 	return ""
 }
 
-func (x *Config) GetMethod() string {
-	if x != nil {
-		return x.Method
-	}
-	return ""
-}
-
 func (x *Config) GetPayload() string {
 	if x != nil {
 		return x.Payload
-	}
-	return ""
-}
-
-func (x *Config) GetWsPath() string {
-	if x != nil {
-		return x.WsPath
-	}
-	return ""
-}
-
-func (x *Config) GetWsHost() string {
-	if x != nil {
-		return x.WsHost
 	}
 	return ""
 }
@@ -244,29 +246,72 @@ func (x *Config) GetInsecure() bool {
 	return false
 }
 
+func (x *Config) GetUsePayload() bool {
+	if x != nil {
+		return x.UsePayload
+	}
+	return false
+}
+
+func (x *Config) GetUseEnhanced() bool {
+	if x != nil {
+		return x.UseEnhanced
+	}
+	return false
+}
+
+func (x *Config) GetUseTls() bool {
+	if x != nil {
+		return x.UseTls
+	}
+	return false
+}
+
+func (x *Config) GetUseSlowdns() bool {
+	if x != nil {
+		return x.UseSlowdns
+	}
+	return false
+}
+
+func (x *Config) GetRemoteProxy() string {
+	if x != nil {
+		return x.RemoteProxy
+	}
+	return ""
+}
+
 var File_proxy_ssh_config_proto protoreflect.FileDescriptor
 
 const file_proxy_ssh_config_proto_rawDesc = "" +
-	"\n\x16proxy/ssh/config.proto\x12\x0exray.p" +
-	"roxy.ssh\"\xfd\x03\n\x06Config\x12\x18\n\x07address\x18\x01" +
-	" \x01(\tR\x07address\x12\x12\n\x04port\x18\x02 \x01(\x0dR\x04por" +
-	"t\x12\x1a\n\x08username\x18\x03 \x01(\tR\x08username\x12\x1a\n" +
-	"\x08password\x18\x04 \x01(\tR\x08password\x12\x1f\n\x0bpri" +
-	"vate_key\x18\x05 \x01(\tR\nprivateKey\x12\x19\n\x08dn" +
-	"stt_ns\x18\x06 \x01(\tR\x07dnsttNs\x12!\n\x0cdnstt_p" +
-	"ubkey\x18\x07 \x01(\tR\x0bdnsttPubkey\x12%\n\x0ednst" +
-	"t_resolver\x18\x08 \x01(\tR\x0ddnsttResolver\x12" +
-	"(\n\x10dnstt_kcp_window\x18\t \x01(\x0dR\x0ednstt" +
-	"KcpWindow\x12*\n\x11dnstt_record_type\x18\n" +
-	" \x01(\tR\x0fdnsttRecordType\x12\x16\n\x06method\x18" +
-	"\x0b \x01(\tR\x06method\x12\x18\n\x07payload\x18\x0c \x01(\tR\x07" +
-	"payload\x12\x17\n\x07ws_path\x18\x0d \x01(\tR\x06wsPath" +
-	"\x12\x17\n\x07ws_host\x18\x0e \x01(\tR\x06wsHost\x12\x10\n\x03sni" +
-	"\x18\x0f \x01(\tR\x03sni\x12\x1f\n\x0bsni_version\x18\x10 \x01(\t" +
-	"R\nsniVersion\x12\x1a\n\x08insecure\x18\x11 \x01(\x08R\x08" +
-	"insecureBL\n\x12com.xray.proxy.sshP\x01" +
-	"Z#github.com/xtls/xray-core/prox" +
-	"y/ssh\xaa\x02\x0eXray.Proxy.Sshb\x06proto3"
+	"\n" +
+	"\x16proxy/ssh/config.proto\x12\x0exray.proxy.ssh\"\xe6\x04\n" +
+	"\x06Config\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1a\n" +
+	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\x12\x1f\n" +
+	"\vprivate_key\x18\x05 \x01(\tR\n" +
+	"privateKey\x12\x19\n" +
+	"\bdnstt_ns\x18\x06 \x01(\tR\adnsttNs\x12!\n" +
+	"\fdnstt_pubkey\x18\a \x01(\tR\vdnsttPubkey\x12%\n" +
+	"\x0ednstt_resolver\x18\b \x01(\tR\rdnsttResolver\x12(\n" +
+	"\x10dnstt_kcp_window\x18\t \x01(\rR\x0ednsttKcpWindow\x12*\n" +
+	"\x11dnstt_record_type\x18\n" +
+	" \x01(\tR\x0fdnsttRecordType\x12\x18\n" +
+	"\apayload\x18\f \x01(\tR\apayload\x12\x10\n" +
+	"\x03sni\x18\x0f \x01(\tR\x03sni\x12\x1f\n" +
+	"\vsni_version\x18\x10 \x01(\tR\n" +
+	"sniVersion\x12\x1a\n" +
+	"\binsecure\x18\x11 \x01(\bR\binsecure\x12\x1f\n" +
+	"\vuse_payload\x18\x12 \x01(\bR\n" +
+	"usePayload\x12!\n" +
+	"\fuse_enhanced\x18\x13 \x01(\bR\vuseEnhanced\x12\x17\n" +
+	"\ause_tls\x18\x14 \x01(\bR\x06useTls\x12\x1f\n" +
+	"\vuse_slowdns\x18\x15 \x01(\bR\n" +
+	"useSlowdns\x12!\n" +
+	"\fremote_proxy\x18\x16 \x01(\tR\vremoteProxyJ\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fBL\n" +
+	"\x12com.xray.proxy.sshP\x01Z#github.com/xtls/xray-core/proxy/ssh\xaa\x02\x0eXray.Proxy.Sshb\x06proto3"
 
 var (
 	file_proxy_ssh_config_proto_rawDescOnce sync.Once

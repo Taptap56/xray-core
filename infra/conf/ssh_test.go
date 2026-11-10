@@ -81,37 +81,61 @@ func TestSSHConfig(t *testing.T) {
 			},
 		},
 		{
-			// HTTP Custom style methods round-trip: WS+TLS with a
-			// custom host, SNI, pinned TLS version and insecure.
+			// HTTP Custom style layers round-trip: payload + TLS
+			// together, with a remote proxy, SNI, pinned TLS
+			// version and insecure.
 			Input: `{
 				"address": "ssh.example.com",
 				"port": 443,
 				"username": "alice",
 				"password": "secret",
-				"method": "ws-tls",
-				"wsPath": "/ssh",
-				"wsHost": "ws.example.com",
+				"usePayload": true,
+				"useTls": true,
+				"remoteProxy": "user:pass@proxy.example.com:8080",
+				"payload": "GET / HTTP/1.1\nHost: [host]\n\n",
 				"sni": "sni.example.com",
 				"sniVersion": "tls1.2",
 				"insecure": true
 			}`,
 			Parser: loadJSON(creator),
 			Output: &ssh.Config{
-				Address:    "ssh.example.com",
-				Port:       443,
-				Username:   "alice",
-				Password:   "secret",
-				Method:     "ws-tls",
-				WsPath:     "/ssh",
-				WsHost:     "ws.example.com",
-				Sni:        "sni.example.com",
-				SniVersion: "tls1.2",
-				Insecure:   true,
+				Address:     "ssh.example.com",
+				Port:        443,
+				Username:    "alice",
+				Password:    "secret",
+				UsePayload:  true,
+				UseTls:      true,
+				RemoteProxy: "user:pass@proxy.example.com:8080",
+				Payload:     "GET / HTTP/1.1\nHost: [host]\n\n",
+				Sni:         "sni.example.com",
+				SniVersion:  "tls1.2",
+				Insecure:    true,
 			},
 		},
 		{
-			// Payload method round-trips the template verbatim
+			// Payload layer round-trips the template verbatim
 			// (substitution happens at dial time, not in Build).
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 3128,
+				"username": "alice",
+				"password": "secret",
+				"usePayload": true,
+				"payload": "GET / HTTP/1.1\nHost: [host]\n\n"
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:    "ssh.example.com",
+				Port:       3128,
+				Username:   "alice",
+				Password:   "secret",
+				UsePayload: true,
+				Payload:    "GET / HTTP/1.1\nHost: [host]\n\n",
+			},
+		},
+		{
+			// Legacy "method" migrates to the layer flags when no
+			// layer flag is set: "payload" -> usePayload.
 			Input: `{
 				"address": "ssh.example.com",
 				"port": 3128,
@@ -122,12 +146,86 @@ func TestSSHConfig(t *testing.T) {
 			}`,
 			Parser: loadJSON(creator),
 			Output: &ssh.Config{
-				Address:  "ssh.example.com",
-				Port:     3128,
-				Username: "alice",
-				Password: "secret",
-				Method:   "payload",
-				Payload:  "GET / HTTP/1.1\nHost: [host]\n\n",
+				Address:    "ssh.example.com",
+				Port:       3128,
+				Username:   "alice",
+				Password:   "secret",
+				UsePayload: true,
+				Payload:    "GET / HTTP/1.1\nHost: [host]\n\n",
+			},
+		},
+		{
+			// Legacy "ws-tls" migrates to direct: the WS dial was
+			// removed (HTTP Custom has no WS transport for SSH).
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 443,
+				"username": "alice",
+				"password": "secret",
+				"method": "ws-tls",
+				"sni": "sni.example.com",
+				"sniVersion": "tls1.2",
+				"insecure": true
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:    "ssh.example.com",
+				Port:       443,
+				Username:   "alice",
+				Password:   "secret",
+				Sni:        "sni.example.com",
+				SniVersion: "tls1.2",
+				Insecure:   true,
+			},
+		},
+		{
+			// Legacy "slowdns" migrates to the slowdns layer.
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 22,
+				"username": "alice",
+				"password": "secret",
+				"method": "slowdns",
+				"dnsttNs": "ns.example.com",
+				"dnsttPubkey": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+				"dnsttResolver": "1.1.1.1:53",
+				"dnsttKcpWindow": 512
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:        "ssh.example.com",
+				Port:           22,
+				Username:       "alice",
+				Password:       "secret",
+				UseSlowdns:     true,
+				DnsttNs:        "ns.example.com",
+				DnsttPubkey:    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+				DnsttResolver:  "1.1.1.1:53",
+				DnsttKcpWindow: 512,
+			},
+		},
+		{
+			// Layer flags win over a legacy "method": payload +
+			// TLS layers stay on, "slowdns" is ignored.
+			Input: `{
+				"address": "ssh.example.com",
+				"port": 443,
+				"username": "alice",
+				"password": "secret",
+				"method": "slowdns",
+				"usePayload": true,
+				"useTls": true,
+				"payload": "GET / HTTP/1.1\nHost: [host]\n\n"
+			}`,
+			Parser: loadJSON(creator),
+			Output: &ssh.Config{
+				Address:    "ssh.example.com",
+				Port:       443,
+				Username:   "alice",
+				Password:   "secret",
+				UsePayload: true,
+				UseTls:     true,
+				Payload:    "GET / HTTP/1.1\nHost: [host]\n\n",
 			},
 		},
 	})
