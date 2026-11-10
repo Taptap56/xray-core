@@ -222,8 +222,10 @@ func (c *Client) wrapTLS(ctx context.Context, raw stdnet.Conn) (stdnet.Conn, err
 //     dial, or a direct TCP dial.
 //  2. Payload layer (payload, or enhanced which also sends it):
 //     write the custom payload.
-//  3. Enhanced layer: read and discard the server's HTTP response
-//     headers before proceeding.
+//  3. Enhanced layer: briefly read the server's reply to the
+//     payload, best-effort — a real SSH server answers with its
+//     version banner, not HTTP headers, so a missing or non-HTTP
+//     reply must not fail the dial.
 //  4. TLS layer: TLS handshake with SNI.
 //
 // With no layer on this is a plain TCP dial. The DNSTT session
@@ -255,15 +257,13 @@ func (c *Client) dialTransport(ctx context.Context, dialer internet.Dialer) (std
 		}
 	}
 	if c.config.UseEnhanced {
-		// The Enhanced layer only waits for the response; its
-		// status is not checked.
-		var enhancedConn stdnet.Conn
-		enhancedConn, _, err = readHTTPResponseHeaders(ctx, transport)
-		if err != nil {
-			transport.Close()
-			return nil, errors.New("ssh: read enhanced response").Base(err)
-		}
-		transport = enhancedConn
+		// The Enhanced layer waits briefly for the server's reply
+		// to the payload, best-effort: a real SSH server answers
+		// with its version banner, not HTTP headers, so a missing
+		// or non-HTTP reply must not fail the dial — the handshake
+		// surfaces a dead peer. Bytes already read stay buffered
+		// for the handshake.
+		transport = readEnhancedResponse(ctx, transport)
 	}
 	if c.config.UseTls {
 		transport, err = c.wrapTLS(ctx, transport)

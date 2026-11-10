@@ -338,6 +338,31 @@ func TestDialEnhancedEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDialEnhancedAgainstRealSSHServer proves the enhanced layer is
+// best-effort: a real SSH server never sends HTTP response headers —
+// it answers the payload with its SSH version banner ("SSH-2.0-…")
+// and waits for the client's. The enhanced client must not hang
+// waiting for a blank line that never comes, and must not lose the
+// banner: it reads the first line, sees it is not HTTP, and replays
+// it to the SSH handshake (the server writes its banner before
+// reading the client's version, so consuming it would leave the
+// handshake staring at the binary key-exchange packet).
+func TestDialEnhancedAgainstRealSSHServer(t *testing.T) {
+	echoAddr := startEchoServer(t)
+	srv := newMethodTestSSHServer(t, echoAddr)
+	ln, err := stdnet.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No wrap: a real sshd, which sends its banner and waits.
+	srv.serveListener(t, ln, nil)
+	addr := ln.Addr().(*stdnet.TCPAddr)
+	c := sshClientFor(t, "127.0.0.1", addr.Port)
+	c.config.UseEnhanced = true
+	c.config.Payload = "GET / HTTP/1.1\nHost: [host]\n\n"
+	dialSSHAndEcho(t, c, echoAddr)
+}
+
 // selfSignedCert generates a self-signed TLS cert for 127.0.0.1.
 func selfSignedCert(t *testing.T) tls.Certificate {
 	t.Helper()

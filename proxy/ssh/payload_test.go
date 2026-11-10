@@ -1,6 +1,9 @@
 package ssh
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSubstitutePayload(t *testing.T) {
 	// [host] and [port] are substituted; bare LFs become CRLF.
@@ -28,5 +31,56 @@ func TestSubstitutePayload(t *testing.T) {
 	got = substitutePayload("HELLO\n", "example.com", 22)
 	if got != "HELLO\r\n" {
 		t.Fatalf("no placeholders = %q, want %q", got, "HELLO\r\n")
+	}
+
+	// HC-style line-ending placeholders: [crlf] becomes a real
+	// CRLF, [lf] a bare LF (normalised to CRLF), [cr] a bare CR.
+	got = substitutePayload("GET / HTTP/1.1[crlf]Host: [host][crlf][crlf]", "example.com", 22)
+	want = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+	if got != want {
+		t.Fatalf("[crlf] = %q, want %q", got, want)
+	}
+	got = substitutePayload("A[lf]B[cr]C", "example.com", 22)
+	want = "A\r\nB\rC"
+	if got != want {
+		t.Fatalf("[lf]/[cr] = %q, want %q", got, want)
+	}
+
+	// [ua] is replaced with a real User-Agent, never sent literally.
+	// wantUA pins the exact User-Agent the implementation must
+	// substitute (a common Chrome-on-Android string).
+	const wantUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+	got = substitutePayload("User-Agent: [ua]\r\n", "example.com", 22)
+	if strings.Contains(got, "[ua]") {
+		t.Fatalf("[ua] survived: %q", got)
+	}
+	if got != "User-Agent: "+wantUA+"\r\n" {
+		t.Fatalf("[ua] = %q, want %q", got, "User-Agent: "+wantUA+"\r\n")
+	}
+
+	// Placeholders are case-insensitive ([CRLF], [UA]).
+	got = substitutePayload("GET / HTTP/1.1[CRLF]User-Agent: [UA][CRLF][CRLF]", "example.com", 22)
+	want = "GET / HTTP/1.1\r\nUser-Agent: " + wantUA + "\r\n\r\n"
+	if got != want {
+		t.Fatalf("uppercase placeholders = %q, want %q", got, want)
+	}
+
+	// The user's exact payload shape: [crlf] tokens, [ua], and
+	// [host] pointing at the SSH server. The result must end with
+	// a blank line (\r\n\r\n) and contain no placeholder token.
+	userPayload := "HEAD / HTTP/1.1[crlf]Host: edu.ruangguru.com:80[crlf]Connection: Keep-Alive[crlf]User-Agent: [ua][crlf][crlf]BMOVE / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]"
+	got = substitutePayload(userPayload, "ssh.example.com", 3128)
+	want = "HEAD / HTTP/1.1\r\nHost: edu.ruangguru.com:80\r\nConnection: Keep-Alive\r\nUser-Agent: " + wantUA + "\r\n\r\n" +
+		"BMOVE / HTTP/1.1\r\nHost: ssh.example.com\r\nUpgrade: websocket\r\n\r\n"
+	if got != want {
+		t.Fatalf("user payload = %q, want %q", got, want)
+	}
+	if !strings.HasSuffix(got, "\r\n\r\n") {
+		t.Fatalf("user payload does not end with a blank line: %q", got)
+	}
+	for _, token := range []string{"[crlf]", "[lf]", "[cr]", "[ua]", "[host]", "[port]"} {
+		if strings.Contains(got, token) {
+			t.Fatalf("user payload still contains %q: %q", token, got)
+		}
 	}
 }

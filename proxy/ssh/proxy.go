@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"io"
 	stdnet "net"
 	"strconv"
 	"strings"
@@ -60,13 +61,72 @@ func parseRemoteProxy(s string) (user, pass, host string, port int, err error) {
 	return user, pass, h, portNum, nil
 }
 
+// enhancedReadTimeout bounds the Enhanced layer's wait for the
+// server's reply to the payload. A real SSH server answers with its
+// version banner, not HTTP headers; the read must not outlast the
+// handshake budget, and a slow or silent server must not fail the
+// dial — the handshake itself will surface a dead peer.
+const enhancedReadTimeout = 5 * time.Second
+
+// readEnhancedResponse reads the server's reply to the payload in a
+// best-effort way, for the Enhanced layer, and returns the
+// connection — wrapped so bytes already read are not lost to the
+// SSH handshake that follows. It never returns an error:
+//   - If the first line is an HTTP status line ("HTTP/..."), the
+//     response headers are consumed up to the blank line, as
+//     before.
+//   - If the first line is NOT HTTP (a real SSH server answers
+//     with its "SSH-2.0-…" banner), reading stops after that line
+//     and the line is REPLAYED to the handshake: the server writes
+//     its banner before reading the client's version, so the banner
+//     is the first thing on the wire — consuming it would leave
+//     the handshake staring at the binary key-exchange packet.
+//   - On a read timeout or any other read failure, reading stops
+//     and whatever was read is replayed; a dead peer fails the
+//     handshake, not this layer.
+//
+// This is deliberately separate from readHTTPResponseHeaders: the
+// CONNECT proxy needs a fatal error (and a status check) on a bad
+// response, while Enhanced must not kill the dial.
+func readEnhancedResponse(ctx context.Context, conn stdnet.Conn) stdnet.Conn {
+	deadline := time.Now().Add(enhancedReadTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetReadDeadline(deadline)
+	defer conn.SetReadDeadline(time.Time{})
+	r := bufio.NewReader(conn)
+	line, err := r.ReadString('\n')
+	if err != nil {
+		// No (complete) first line: replay whatever was read
+		// (possibly a partial line) and proceed.
+		return &bufferedConn{Conn: conn, r: bufio.NewReader(io.MultiReader(strings.NewReader(line), r))}
+	}
+	if strings.HasPrefix(strings.TrimSpace(line), "HTTP/") {
+		// HTTP response: consume headers up to the blank line.
+		for {
+			h, err := r.ReadString('\n')
+			if err != nil {
+				break
+			}
+			if strings.TrimSpace(h) == "" {
+				break
+			}
+		}
+		return &bufferedConn{Conn: conn, r: r}
+	}
+	// Non-HTTP first line (e.g. an SSH banner): replay it for the
+	// handshake, then continue with the connection.
+	return &bufferedConn{Conn: conn, r: bufio.NewReader(io.MultiReader(strings.NewReader(line), r))}
+}
+
 // readHTTPResponseHeaders reads an HTTP response's headers from conn
 // (up to the blank line), discarding them, and returns the
 // connection — wrapped so bytes already buffered past the headers
 // are not lost — and the response status code. The wait is bounded
 // by the caller's context deadline, else the SSH handshake timeout.
 // The status code is the caller's to interpret (CONNECT requires
-// 2xx; the Enhanced layer only waits for the response).
+// 2xx).
 func readHTTPResponseHeaders(ctx context.Context, conn stdnet.Conn) (stdnet.Conn, int, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetReadDeadline(deadline)
