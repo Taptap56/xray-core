@@ -70,6 +70,14 @@ import (
 // SSH handshake. The DNSTT Noise handshake alone takes ~6-7 s.
 const sshHandshakeTimeout = 30 * time.Second
 
+// sshKeepAliveInterval is how often the keeper probes the idle SSH
+// session with a keepalive@openssh.com global request. Hardcoded
+// 10 s, the same interval as the SlowDNS keeper in TaptapBox /
+// TaptapClash — no proto field, no config change. It is a var (not
+// a const) only so tests can shorten it; production code never
+// changes it.
+var sshKeepAliveInterval = 10 * time.Second
+
 func init() {
 	common.Must(common.RegisterConfig((*Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
 		c, err := NewClient(ctx, config.(*Config))
@@ -88,6 +96,15 @@ type Client struct {
 	mu        sync.Mutex
 	sshClient *ssh.Client
 	dnsttDial *dnstt.Dialer
+
+	// keepAliveStop / keepAliveDone belong to the keeper goroutine
+	// of the current sshClient (nil when no keeper is running).
+	// The keeper sends a keepalive@openssh.com global request
+	// every sshKeepAliveInterval; a failed probe means the session
+	// died silently while idle, so it resets the client and the
+	// next Process call dials a fresh one.
+	keepAliveStop chan struct{}
+	keepAliveDone chan struct{}
 }
 
 // NewClient creates an SSH outbound handler from its config. It
@@ -215,7 +232,61 @@ func (c *Client) getSSHClient(ctx context.Context, dialer internet.Dialer) (*ssh
 		return nil, errors.New("ssh: handshake with server").Base(err)
 	}
 	c.sshClient = ssh.NewClient(conn, chans, reqs)
+	c.startKeepAliveLocked()
 	return c.sshClient, nil
+}
+
+// startKeepAliveLocked starts the keeper goroutine for the current
+// sshClient. Caller must hold c.mu and c.sshClient must be non-nil.
+// Any previous keeper is stopped first, so a re-established client
+// never leaves an orphan goroutine probing a dead connection.
+func (c *Client) startKeepAliveLocked() {
+	c.stopKeepAliveLocked()
+	client := c.sshClient
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	c.keepAliveStop = stop
+	c.keepAliveDone = done
+	// Capture the interval here, on the starting goroutine: the
+	// keeper must never read the package var itself, or a test
+	// restoring it at the end of a test would race a keeper that
+	// has been started but not yet scheduled.
+	go c.keepAliveLoop(client, stop, done, sshKeepAliveInterval)
+}
+
+// stopKeepAliveLocked signals the current keeper to exit. Caller
+// must hold c.mu. It deliberately does NOT wait for the goroutine:
+// the keeper may be the one calling resetClient (after a failed
+// probe), and waiting for itself would deadlock. The goroutine
+// exits promptly on the closed stop channel (select, no sleep),
+// so no join is needed to avoid a leak.
+func (c *Client) stopKeepAliveLocked() {
+	if c.keepAliveStop != nil {
+		close(c.keepAliveStop)
+		c.keepAliveStop = nil
+	}
+}
+
+// keepAliveLoop probes the SSH session periodically. A failed
+// probe resets the client (dropping the dead session, which also
+// stops this keeper) and the loop returns. A false reply (ok ==
+// false, err == nil) is NOT a failure: some servers answer a
+// keepalive with "not supported" while the session is alive.
+func (c *Client) keepAliveLoop(client *ssh.Client, stop, done chan struct{}, interval time.Duration) {
+	defer close(done)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+				c.resetClient()
+				return
+			}
+		}
+	}
 }
 
 // resetClient drops the cached SSH client (e.g. after a channel
@@ -228,6 +299,7 @@ func (c *Client) resetClient() {
 		_ = c.sshClient.Close()
 		c.sshClient = nil
 	}
+	c.stopKeepAliveLocked()
 }
 
 // Close releases the SSH client and the DNSTT dialer.
