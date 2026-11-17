@@ -72,6 +72,13 @@ func dialWebSocket(ctx context.Context, dest net.Destination, streamSettings *in
 		protocol = "wss"
 		tlsConfig := tConfig.GetTLSConfig(tls.WithDestination(dest), tls.WithNextProto("http/1.1"))
 		dialer.TLSClientConfig = tlsConfig
+		// Dial log (dest + SNI) at Warning level so it is visible
+		// with the default "warning" loglevel: the SNI is the
+		// Onering string (onering:real:bug) when Onering is on, so
+		// the dial — and the SNI the operator sees — shows in
+		// logcat when a server is tested. Info would be hidden
+		// by the default loglevel.
+		errors.LogWarning(ctx, "dialing ", dest, " SNI ", tlsConfig.ServerName)
 		if fingerprint := tls.GetFingerprint(tConfig.Fingerprint); fingerprint != nil {
 			dialer.NetDialTLSContext = func(_ context.Context, _, addr string) (net.Conn, error) {
 				// Like the NetDial in the dialer
