@@ -93,6 +93,19 @@ func (c *UConn) SuppressCloseNotify() {
 	c.suppressCloseNotify.Store(true)
 }
 
+// VerifyHostname memverifikasi sertifikat peer terhadap host.
+// Untuk SNI Onering, verifikasi pakai domain asli (real), bukan string
+// "onering:real:bug" utuh — sertifikat server tidak pernah diterbitkan
+// untuk nama onering. (WS dialer memanggil ini dengan tlsConfig.ServerName
+// yang masih string onering utuh; tanpa ini handshake gagal x509 meski
+// ClientHello + verifikasi di dalam handshake sudah pakai domain asli.)
+func (c *UConn) VerifyHostname(host string) error {
+	if real, _, ok := parseOneringSNI(host); ok {
+		host = real
+	}
+	return c.UConn.VerifyHostname(host)
+}
+
 func (c *UConn) Close() error {
 	if c.suppressCloseNotify.Load() {
 		return c.Conn.NetConn().Close()
