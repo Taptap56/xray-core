@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"math/big"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -172,7 +173,75 @@ func (c *UConn) ConnectionState() tls.ConnectionState {
 	return state
 }
 
+// parseOneringSNI mem-parse SNI Onering "onering:<real>:<bug>" (dharak36/
+// xray-onering, port dari TaptapBox v1.0.44 / TaptapClash v1.0.60).
+// real = domain asli server, bug = domain bug. ok=false bila format
+// tidak cocok.
+func parseOneringSNI(sni string) (real, bug string, ok bool) {
+	if !strings.HasPrefix(sni, "onering:") {
+		return "", "", false
+	}
+	parts := strings.Split(sni, ":")
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
+// oneringBugExtensionData membangun data extension 0xff00 (hasil bedah
+// ClientHello Onering asli): daftar server_name berisi domain bug.
+// Format: list_len(2) + type(1)=0 + host_len(2) + host. Byte-identik
+// dengan TaptapBox / TaptapClash.
+func oneringBugExtensionData(bug string) []byte {
+	listLen := 3 + len(bug)
+	data := make([]byte, 0, 5+len(bug))
+	data = append(data, byte(listLen>>8), byte(listLen), 0, byte(len(bug)>>8), byte(len(bug)))
+	data = append(data, bug...)
+	return data
+}
+
+// UClientOnering membuat UConn dengan HelloCustom: spec fingerprint yang
+// dimodifikasi (SNI = domain asli, extension 0xff00 berisi domain bug
+// paling depan). config.ServerName harus sudah domain asli.
+func UClientOnering(c net.Conn, config *utls.Config, fingerprint utls.ClientHelloID, bug string) (*utls.UConn, error) {
+	uConn := utls.UClient(c, config, utls.HelloCustom)
+	spec, err := utls.UTLSIdToSpec(fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	for _, ext := range spec.Extensions {
+		if sniExt, ok := ext.(*utls.SNIExtension); ok {
+			sniExt.ServerName = config.ServerName
+		}
+	}
+	bugData := oneringBugExtensionData(bug)
+	spec.Extensions = append([]utls.TLSExtension{&utls.GenericExtension{Id: 0xff00, Data: bugData}}, spec.Extensions...)
+	if err := uConn.ApplyPreset(&spec); err != nil {
+		return nil, err
+	}
+	uConn.SetSNI(config.ServerName)
+	return uConn, nil
+}
+
 func UClient(c net.Conn, config *tls.Config, fingerprint *utls.ClientHelloID) net.Conn {
+	// Onering (dharak36/xray-onering, port TB v1.0.44 / TC v1.0.60):
+	// SNI "onering:<real>:<bug>" — bug di extension 0xff00 paling
+	// depan, domain asli di SNI standar. ServerName diubah ke domain
+	// asli dulu (verifikasi sertifikat pakai domain asli).
+	if real, bug, ok := parseOneringSNI(config.ServerName); ok {
+		cfg := copyConfig(config)
+		cfg.ServerName = real
+		fp := utls.HelloChrome_Auto
+		if fingerprint != nil {
+			fp = *fingerprint
+		}
+		if uConn, err := UClientOnering(c, cfg, fp, bug); err == nil {
+			return &UConn{UConn: uConn}
+		}
+		// Gagal bangun Onering -> jatuh ke jalur normal dengan SNI
+		// domain asli (cfg sudah ServerName=real).
+		return &UConn{UConn: utls.UClient(c, cfg, fp)}
+	}
 	utlsConn := utls.UClient(c, copyConfig(config), *fingerprint)
 	return &UConn{UConn: utlsConn}
 }
